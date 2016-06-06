@@ -1,8 +1,8 @@
 Name     : docker-upstream
-Version  : 1.11.1
-Release  : 1
-URL      : https://github.com/docker/docker/archive/v1.11.1.tar.gz
-Source0  : https://github.com/docker/docker/archive/v1.11.1.tar.gz
+Version  : 1.12.0
+Release  : 2
+URL      : https://github.com/docker/docker/archive/3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8.tar.gz
+Source0  : https://github.com/docker/docker/archive/3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8.tar.gz
 Summary  : the open-source application container engine
 Group    : Development/Tools
 License  : Apache-2.0
@@ -26,23 +26,14 @@ Patch1    : 0001-add-suffix-to-socket-and-service-files.patch
 %global gopath /usr/lib/golang
 %global library_path github.com/docker/
 
-%global commit_id 5604cbed50d51c4039b1abcb1cf87c4e01bce924
+%global commit_id 3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8
 
 %description
 Docker is an open source project to pack, ship and run any application as a lightweight container.
 
 %prep
-%setup -q -n docker-%{version}
+%setup -q -n docker-3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8
 %patch1 -p1
-#%patch1 -p1
-#%if "%{_vendor}" != "clr"
-#%patch2 -p1
-#%endif
-# %patch401 -p1
-# %patch402 -p1
-# %patch403 -p1
-# %patch5 -p1
-# %patch6 -p1
 
 %build
 mkdir -p src/github.com/docker/
@@ -54,7 +45,8 @@ export DOCKER_GITCOMMIT=%commit_id AUTO_GOPATH=1 GOROOT=/usr/lib/golang
 rm -rf %{buildroot}
 # install binary
 install -d %{buildroot}/%{_bindir}
-install -p -m 755 bundles/latest/dynbinary/docker-%{version} %{buildroot}%{_bindir}/docker-upstream
+install -p -m 755 bundles/latest/dynbinary-client/docker-%{version}-dev %{buildroot}%{_bindir}/docker-upstream
+install -p -m 755 bundles/latest/dynbinary-daemon/dockerd-%{version}-dev %{buildroot}%{_bindir}/dockerd-upstream
 # install containerd
 ln -s /usr/bin/containerd %{buildroot}/%{_bindir}/docker-containerd
 ln -s /usr/bin/containerd-shim %{buildroot}/%{_bindir}/docker-containerd-shim
@@ -78,6 +70,7 @@ install -d %{buildroot}/%{_initddir}
 %files
 %defattr(-,root,root,-)
 %{_bindir}/docker-upstream
+%{_bindir}/dockerd-upstream
 %{_bindir}/docker-containerd
 %{_bindir}/docker-containerd-shim
 %{_bindir}/docker-containerd-ctr

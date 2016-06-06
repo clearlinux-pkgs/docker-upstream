@@ -1,14 +1,15 @@
-From 91563b88b5667adae9f791ad6c6b90de94d0a702 Mon Sep 17 00:00:00 2001
+From 0c21989d6fb91af0dbc356665ffc20d5c979e46f Mon Sep 17 00:00:00 2001
 From: Julio Montes <julio.montes@intel.com>
-Date: Fri, 8 Apr 2016 09:36:29 -0500
+Date: Mon, 6 Jun 2016 16:17:07 -0500
 Subject: [PATCH] add suffix to socket and service files
 
+Signed-off-by: Julio Montes <julio.montes@intel.com>
 ---
- contrib/init/systemd/docker-upstream.service | 22 ++++++++++++++++++++++
+ contrib/init/systemd/docker-upstream.service | 25 +++++++++++++++++++++++++
  contrib/init/systemd/docker-upstream.socket  | 12 ++++++++++++
- contrib/init/systemd/docker.service         | 22 ----------------------
- contrib/init/systemd/docker.socket          | 12 ------------
- 4 files changed, 34 insertions(+), 34 deletions(-)
+ contrib/init/systemd/docker.service          | 25 -------------------------
+ contrib/init/systemd/docker.socket           | 12 ------------
+ 4 files changed, 37 insertions(+), 37 deletions(-)
  create mode 100644 contrib/init/systemd/docker-upstream.service
  create mode 100644 contrib/init/systemd/docker-upstream.socket
  delete mode 100644 contrib/init/systemd/docker.service
@@ -16,26 +17,29 @@ Subject: [PATCH] add suffix to socket and service files
 
 diff --git a/contrib/init/systemd/docker-upstream.service b/contrib/init/systemd/docker-upstream.service
 new file mode 100644
-index 0000000..2660b9e
+index 0000000..ac0c5f4
 --- /dev/null
 +++ b/contrib/init/systemd/docker-upstream.service
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,25 @@
 +[Unit]
 +Description=Docker Application Container Engine
 +Documentation=https://docs.docker.com
-+After=network.target docker-upstream.socket
-+Requires=docker-upstream.socket
++After=network.target docker.socket
++Requires=docker.socket
 +
 +[Service]
 +Type=notify
 +# the default is not to use systemd for cgroups because the delegate issues still
 +# exists and systemd currently does not support the cgroup feature set required
 +# for containers run by docker
-+ExecStart=/usr/bin/docker-upstream daemon -H fd://
-+MountFlags=slave
++ExecStart=/usr/bin/dockerd-upstream -H fd://
++ExecReload=/bin/kill -s HUP $MAINPID
 +LimitNOFILE=1048576
 +LimitNPROC=1048576
 +LimitCORE=infinity
++# Uncomment TasksMax if your systemd version supports it.
++# Only systemd 226 and above support this version.
++#TasksMax=infinity
 +TimeoutStartSec=0
 +# set delegate yes so that systemd does not reset the cgroups of docker containers
 +Delegate=yes
@@ -44,13 +48,13 @@ index 0000000..2660b9e
 +WantedBy=multi-user.target
 diff --git a/contrib/init/systemd/docker-upstream.socket b/contrib/init/systemd/docker-upstream.socket
 new file mode 100644
-index 0000000..03e9cbe
+index 0000000..7dd9509
 --- /dev/null
 +++ b/contrib/init/systemd/docker-upstream.socket
 @@ -0,0 +1,12 @@
 +[Unit]
 +Description=Docker Socket for the API
-+PartOf=docker-upstream.service
++PartOf=docker.service
 +
 +[Socket]
 +ListenStream=/var/run/docker.sock
@@ -62,10 +66,10 @@ index 0000000..03e9cbe
 +WantedBy=sockets.target
 diff --git a/contrib/init/systemd/docker.service b/contrib/init/systemd/docker.service
 deleted file mode 100644
-index 75cb68c..0000000
+index 9b0ce63..0000000
 --- a/contrib/init/systemd/docker.service
 +++ /dev/null
-@@ -1,22 +0,0 @@
+@@ -1,25 +0,0 @@
 -[Unit]
 -Description=Docker Application Container Engine
 -Documentation=https://docs.docker.com
@@ -77,11 +81,14 @@ index 75cb68c..0000000
 -# the default is not to use systemd for cgroups because the delegate issues still
 -# exists and systemd currently does not support the cgroup feature set required
 -# for containers run by docker
--ExecStart=/usr/bin/docker daemon -H fd://
--MountFlags=slave
+-ExecStart=/usr/bin/dockerd -H fd://
+-ExecReload=/bin/kill -s HUP $MAINPID
 -LimitNOFILE=1048576
 -LimitNPROC=1048576
 -LimitCORE=infinity
+-# Uncomment TasksMax if your systemd version supports it.
+-# Only systemd 226 and above support this version.
+-#TasksMax=infinity
 -TimeoutStartSec=0
 -# set delegate yes so that systemd does not reset the cgroups of docker containers
 -Delegate=yes
