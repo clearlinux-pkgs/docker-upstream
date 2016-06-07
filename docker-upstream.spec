@@ -1,6 +1,6 @@
 Name     : docker-upstream
 Version  : 1.12.0
-Release  : 2
+Release  : 3
 URL      : https://github.com/docker/docker/archive/3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8.tar.gz
 Source0  : https://github.com/docker/docker/archive/3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8.tar.gz
 Summary  : the open-source application container engine
