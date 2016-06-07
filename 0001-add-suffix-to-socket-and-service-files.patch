@@ -24,8 +24,8 @@ index 0000000..ac0c5f4
 +[Unit]
 +Description=Docker Application Container Engine
 +Documentation=https://docs.docker.com
-+After=network.target docker.socket
-+Requires=docker.socket
++After=network.target docker-upstream.socket
++Requires=docker-upstream.socket
 +
 +[Service]
 +Type=notify
@@ -54,7 +54,7 @@ index 0000000..7dd9509
 @@ -0,0 +1,12 @@
 +[Unit]
 +Description=Docker Socket for the API
-+PartOf=docker.service
++PartOf=docker-upstream.service
 +
 +[Socket]
 +ListenStream=/var/run/docker.sock
