@@ -1,0 +1,60 @@
+From 9ca0550683d0c6bcc74a768866d9fe524269d2a0 Mon Sep 17 00:00:00 2001
+From: Kenfe-Mickael Laventure <mickael.laventure@gmail.com>
+Date: Fri, 3 Jun 2016 09:12:20 -0700
+Subject: [PATCH 5/5] Add bash completion support for --runtime and
+ --add-runtime
+
+Signed-off-by: Kenfe-Mickael Laventure <mickael.laventure@gmail.com>
+---
+ contrib/completion/bash/docker | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/contrib/completion/bash/docker b/contrib/completion/bash/docker
+index 57b9e95..dd4460e 100644
+--- a/contrib/completion/bash/docker
++++ b/contrib/completion/bash/docker
+@@ -189,6 +189,14 @@ __docker_complete_plugins() {
+ 	COMPREPLY=( $(compgen -W "$(__docker_plugins $1)" -- "$cur") )
+ }
+ 
++__docker_runtimes() {
++	__docker_q info | sed -n 's/^Runtimes: \(.*\)/\1/p'
++}
++
++__docker_complete_runtimes() {
++	COMPREPLY=( $(compgen -W "$(__docker_runtimes)" -- "$cur") )
++}
++
+ # Finds the position of the first word that is neither option nor an option's argument.
+ # If there are options that require arguments, you should pass a glob describing those
+ # options, e.g. "--option1|-o|--option2"
+@@ -790,6 +798,7 @@ _docker_daemon() {
+ 	"
+ 	local options_with_args="
+ 		$global_options_with_args
++		--add-runtime
+ 		--api-cors-header
+ 		--authorization-plugin
+ 		--bip
+@@ -1700,6 +1709,7 @@ _docker_run() {
+ 		--pids-limit
+ 		--publish -p
+ 		--restart
++		--runtime
+ 		--security-opt
+ 		--shm-size
+ 		--stop-signal
+@@ -1878,6 +1888,10 @@ _docker_run() {
+ 			esac
+ 			return
+ 			;;
++		--runtime)
++			__docker_complete_runtimes
++			return
++			;;
+ 		--security-opt)
+ 			COMPREPLY=( $( compgen -W "apparmor= label= no-new-privileges seccomp=" -- "$cur") )
+ 			if [ "${COMPREPLY[*]}" != "no-new-privileges" ] ; then
+-- 
+2.8.2
+

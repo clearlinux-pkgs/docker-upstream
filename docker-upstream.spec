@@ -17,6 +17,10 @@ Requires : containerd
 Requires : runc
 Conflicts : docker
 Patch1    : 0001-add-suffix-to-socket-and-service-files.patch
+Patch2 : 0002-Vendor-in-new-containerd-version.patch
+Patch3 : 0003-Add-support-for-multiples-runtimes.patch
+Patch4 : 0004-Add-missing-completion-for-config-file.patch
+Patch5 : 0005-Add-bash-completion-support-for-runtime-and-add-runt.patch
 
 # don't strip, these are not ordinary object files
 %global __os_install_post %{nil}
@@ -34,6 +38,10 @@ Docker is an open source project to pack, ship and run any application as a ligh
 %prep
 %setup -q -n docker-3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8
 %patch1 -p1
+%patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
 
 %build
 mkdir -p src/github.com/docker/

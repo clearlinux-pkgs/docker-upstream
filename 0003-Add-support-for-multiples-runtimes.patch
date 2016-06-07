@@ -1,0 +1,1070 @@
+From d95640e4fa41097abfa9eee6c65c65e498c20066 Mon Sep 17 00:00:00 2001
+From: Kenfe-Mickael Laventure <mickael.laventure@gmail.com>
+Date: Mon, 23 May 2016 14:49:50 -0700
+Subject: [PATCH 3/5] Add support for multiples runtimes
+
+Signed-off-by: Kenfe-Mickael Laventure <mickael.laventure@gmail.com>
+---
+ api/client/info.go                             |  11 +-
+ cmd/dockerd/daemon.go                          |   4 +
+ cmd/dockerd/daemon_unix.go                     |   1 +
+ daemon/config.go                               |  31 ++++-
+ daemon/config_test.go                          |  12 +-
+ daemon/config_unix.go                          |  34 +++++
+ daemon/config_windows.go                       |  17 +++
+ daemon/daemon.go                               |  22 ++-
+ daemon/daemon_solaris.go                       |   4 +
+ daemon/daemon_unix.go                          |  43 ++++++
+ daemon/daemon_windows.go                       |   4 +
+ daemon/info.go                                 |   2 +
+ daemon/start.go                                |  18 ++-
+ daemon/start_linux.go                          |  20 +++
+ daemon/start_windows.go                        |  10 ++
+ docs/reference/commandline/create.md           |   1 +
+ docs/reference/commandline/dockerd.md          |  20 ++-
+ docs/reference/commandline/run.md              |   1 +
+ integration-cli/docker_cli_daemon_test.go      | 180 +++++++++++++++++++++++++
+ integration-cli/docker_cli_events_unix_test.go |   3 +-
+ integration-cli/docker_cli_info_test.go        |   4 +
+ libcontainerd/container_linux.go               |  24 +++-
+ libcontainerd/remote_linux.go                  |  22 ++-
+ runconfig/opts/parse.go                        |   4 +-
+ runconfig/opts/runtime.go                      |  73 ++++++++++
+ 25 files changed, 542 insertions(+), 23 deletions(-)
+ create mode 100644 daemon/start_linux.go
+ create mode 100644 daemon/start_windows.go
+ create mode 100644 runconfig/opts/runtime.go
+
+diff --git a/api/client/info.go b/api/client/info.go
+index 283b77b..30cf05d 100644
+--- a/api/client/info.go
++++ b/api/client/info.go
+@@ -54,7 +54,7 @@ func (cli *DockerCli) CmdInfo(args ...string) error {
+ 	ioutils.FprintfIfNotEmpty(cli.out, "Logging Driver: %s\n", info.LoggingDriver)
+ 	ioutils.FprintfIfNotEmpty(cli.out, "Cgroup Driver: %s\n", info.CgroupDriver)
+ 
+-	fmt.Fprintf(cli.out, "Plugins: \n")
++	fmt.Fprintf(cli.out, "Plugins:\n")
+ 	fmt.Fprintf(cli.out, " Volume:")
+ 	fmt.Fprintf(cli.out, " %s", strings.Join(info.Plugins.Volume, " "))
+ 	fmt.Fprintf(cli.out, "\n")
+@@ -68,6 +68,15 @@ func (cli *DockerCli) CmdInfo(args ...string) error {
+ 		fmt.Fprintf(cli.out, "\n")
+ 	}
+ 
++	if len(info.Runtimes) > 0 {
++		fmt.Fprintf(cli.out, "Runtimes:")
++		for name := range info.Runtimes {
++			fmt.Fprintf(cli.out, " %s", name)
++		}
++		fmt.Fprint(cli.out, "\n")
++		fmt.Fprintf(cli.out, "Default Runtime: %s\n", info.DefaultRuntime)
++	}
++
+ 	ioutils.FprintfIfNotEmpty(cli.out, "Kernel Version: %s\n", info.KernelVersion)
+ 	ioutils.FprintfIfNotEmpty(cli.out, "Operating System: %s\n", info.OperatingSystem)
+ 	ioutils.FprintfIfNotEmpty(cli.out, "OSType: %s\n", info.OSType)
+diff --git a/cmd/dockerd/daemon.go b/cmd/dockerd/daemon.go
+index cdbdefc..93a9036 100644
+--- a/cmd/dockerd/daemon.go
++++ b/cmd/dockerd/daemon.go
+@@ -374,6 +374,10 @@ func loadDaemonCliConfig(config *daemon.Config, flags *flag.FlagSet, commonConfi
+ 		}
+ 	}
+ 
++	if err := daemon.ValidateConfiguration(config); err != nil {
++		return nil, err
++	}
++
+ 	// Regardless of whether the user sets it to true or false, if they
+ 	// specify TLSVerify at all then we need to turn on TLS
+ 	if config.IsValueSet(cliflags.TLSVerifyKey) {
+diff --git a/cmd/dockerd/daemon_unix.go b/cmd/dockerd/daemon_unix.go
+index cb1e6fc..868a565 100644
+--- a/cmd/dockerd/daemon_unix.go
++++ b/cmd/dockerd/daemon_unix.go
+@@ -71,6 +71,7 @@ func (cli *DaemonCli) getPlatformRemoteOptions() []libcontainerd.RemoteOption {
+ 		args := []string{"--systemd-cgroup=true"}
+ 		opts = append(opts, libcontainerd.WithRuntimeArgs(args))
+ 	}
++	opts = append(opts, libcontainerd.WithRuntimePath(daemon.DefaultRuntimeBinary))
+ 	return opts
+ }
+ 
+diff --git a/daemon/config.go b/daemon/config.go
+index f16026d..28a9b0a 100644
+--- a/daemon/config.go
++++ b/daemon/config.go
+@@ -14,6 +14,7 @@ import (
+ 	"github.com/docker/docker/pkg/discovery"
+ 	flag "github.com/docker/docker/pkg/mflag"
+ 	"github.com/docker/docker/registry"
++	"github.com/docker/engine-api/types"
+ 	"github.com/imdario/mergo"
+ )
+ 
+@@ -40,6 +41,7 @@ const (
+ var flatOptions = map[string]bool{
+ 	"cluster-store-opts": true,
+ 	"log-opts":           true,
++	"runtimes":           true,
+ }
+ 
+ // LogConfig represents the default log configuration.
+@@ -199,7 +201,7 @@ func ReloadConfiguration(configFile string, flags *flag.FlagSet, reload func(*Co
+ 		return err
+ 	}
+ 
+-	if err := validateConfiguration(newConfig); err != nil {
++	if err := ValidateConfiguration(newConfig); err != nil {
+ 		return fmt.Errorf("file configuration validation failed (%v)", err)
+ 	}
+ 
+@@ -223,7 +225,7 @@ func MergeDaemonConfigurations(flagsConfig *Config, flags *flag.FlagSet, configF
+ 		return nil, err
+ 	}
+ 
+-	if err := validateConfiguration(fileConfig); err != nil {
++	if err := ValidateConfiguration(fileConfig); err != nil {
+ 		return nil, fmt.Errorf("file configuration validation failed (%v)", err)
+ 	}
+ 
+@@ -232,6 +234,12 @@ func MergeDaemonConfigurations(flagsConfig *Config, flags *flag.FlagSet, configF
+ 		return nil, err
+ 	}
+ 
++	// We need to validate again once both fileConfig and flagsConfig
++	// have been merged
++	if err := ValidateConfiguration(fileConfig); err != nil {
++		return nil, fmt.Errorf("file configuration validation failed (%v)", err)
++	}
++
+ 	return fileConfig, nil
+ }
+ 
+@@ -380,10 +388,10 @@ func findConfigurationConflicts(config map[string]interface{}, flags *flag.FlagS
+ 	return nil
+ }
+ 
+-// validateConfiguration validates some specific configs.
++// ValidateConfiguration validates some specific configs.
+ // such as config.DNS, config.Labels, config.DNSSearch,
+ // as well as config.MaxConcurrentDownloads, config.MaxConcurrentUploads.
+-func validateConfiguration(config *Config) error {
++func ValidateConfiguration(config *Config) error {
+ 	// validate DNS
+ 	for _, dns := range config.DNS {
+ 		if _, err := opts.ValidateIPAddress(dns); err != nil {
+@@ -414,5 +422,20 @@ func validateConfiguration(config *Config) error {
+ 	if config.IsValueSet("max-concurrent-uploads") && config.MaxConcurrentUploads != nil && *config.MaxConcurrentUploads < 0 {
+ 		return fmt.Errorf("invalid max concurrent uploads: %d", *config.MaxConcurrentUploads)
+ 	}
++
++	// validate that "default" runtime is not reset
++	if runtimes := config.GetAllRuntimes(); len(runtimes) > 0 {
++		if _, ok := runtimes[types.DefaultRuntimeName]; ok {
++			return fmt.Errorf("runtime name '%s' is reserved", types.DefaultRuntimeName)
++		}
++	}
++
++	if defaultRuntime := config.GetDefaultRuntimeName(); defaultRuntime != "" && defaultRuntime != types.DefaultRuntimeName {
++		runtimes := config.GetAllRuntimes()
++		if _, ok := runtimes[defaultRuntime]; !ok {
++			return fmt.Errorf("specified default runtime '%s' does not exist", defaultRuntime)
++		}
++	}
++
+ 	return nil
+ }
+diff --git a/daemon/config_test.go b/daemon/config_test.go
+index 7647f4d..0375c1a 100644
+--- a/daemon/config_test.go
++++ b/daemon/config_test.go
+@@ -216,7 +216,7 @@ func TestValidateConfiguration(t *testing.T) {
+ 		},
+ 	}
+ 
+-	err := validateConfiguration(c1)
++	err := ValidateConfiguration(c1)
+ 	if err == nil {
+ 		t.Fatal("expected error, got nil")
+ 	}
+@@ -227,7 +227,7 @@ func TestValidateConfiguration(t *testing.T) {
+ 		},
+ 	}
+ 
+-	err = validateConfiguration(c2)
++	err = ValidateConfiguration(c2)
+ 	if err != nil {
+ 		t.Fatalf("expected no error, got error %v", err)
+ 	}
+@@ -238,7 +238,7 @@ func TestValidateConfiguration(t *testing.T) {
+ 		},
+ 	}
+ 
+-	err = validateConfiguration(c3)
++	err = ValidateConfiguration(c3)
+ 	if err != nil {
+ 		t.Fatalf("expected no error, got error %v", err)
+ 	}
+@@ -249,7 +249,7 @@ func TestValidateConfiguration(t *testing.T) {
+ 		},
+ 	}
+ 
+-	err = validateConfiguration(c4)
++	err = ValidateConfiguration(c4)
+ 	if err == nil {
+ 		t.Fatal("expected error, got nil")
+ 	}
+@@ -260,7 +260,7 @@ func TestValidateConfiguration(t *testing.T) {
+ 		},
+ 	}
+ 
+-	err = validateConfiguration(c5)
++	err = ValidateConfiguration(c5)
+ 	if err != nil {
+ 		t.Fatalf("expected no error, got error %v", err)
+ 	}
+@@ -271,7 +271,7 @@ func TestValidateConfiguration(t *testing.T) {
+ 		},
+ 	}
+ 
+-	err = validateConfiguration(c6)
++	err = ValidateConfiguration(c6)
+ 	if err == nil {
+ 		t.Fatal("expected error, got nil")
+ 	}
+diff --git a/daemon/config_unix.go b/daemon/config_unix.go
+index f7a0ea5..eeea14c 100644
+--- a/daemon/config_unix.go
++++ b/daemon/config_unix.go
+@@ -8,6 +8,7 @@ import (
+ 	"github.com/docker/docker/opts"
+ 	flag "github.com/docker/docker/pkg/mflag"
+ 	runconfigopts "github.com/docker/docker/runconfig/opts"
++	"github.com/docker/engine-api/types"
+ 	"github.com/docker/go-units"
+ )
+ 
+@@ -30,6 +31,8 @@ type Config struct {
+ 	ExecRoot             string                   `json:"exec-root,omitempty"`
+ 	RemappedRoot         string                   `json:"userns-remap,omitempty"`
+ 	Ulimits              map[string]*units.Ulimit `json:"default-ulimits,omitempty"`
++	Runtimes             map[string]types.Runtime `json:"runtimes,omitempty"`
++	DefaultRuntime       string                   `json:"default-runtime,omitempty"`
+ }
+ 
+ // bridgeConfig stores all the bridge driver specific
+@@ -82,6 +85,37 @@ func (config *Config) InstallFlags(cmd *flag.FlagSet, usageFn func(string) strin
+ 	cmd.StringVar(&config.CgroupParent, []string{"-cgroup-parent"}, "", usageFn("Set parent cgroup for all containers"))
+ 	cmd.StringVar(&config.RemappedRoot, []string{"-userns-remap"}, "", usageFn("User/Group setting for user namespaces"))
+ 	cmd.StringVar(&config.ContainerdAddr, []string{"-containerd"}, "", usageFn("Path to containerd socket"))
++	config.Runtimes = make(map[string]types.Runtime)
++	cmd.Var(runconfigopts.NewNamedRuntimeOpt("runtimes", &config.Runtimes), []string{"-add-runtime"}, usageFn("Register an additional OCI compatible runtime"))
++	cmd.StringVar(&config.DefaultRuntime, []string{"-default-runtime"}, types.DefaultRuntimeName, usageFn("Default OCI runtime to be used"))
+ 
+ 	config.attachExperimentalFlags(cmd, usageFn)
+ }
++
++// GetRuntime returns the runtime path and arguments for a given
++// runtime name
++func (config *Config) GetRuntime(name string) *types.Runtime {
++	config.reloadLock.Lock()
++	defer config.reloadLock.Unlock()
++	if rt, ok := config.Runtimes[name]; ok {
++		return &rt
++	}
++	return nil
++}
++
++// GetDefaultRuntimeName returns the current default runtime
++func (config *Config) GetDefaultRuntimeName() string {
++	config.reloadLock.Lock()
++	rt := config.DefaultRuntime
++	config.reloadLock.Unlock()
++
++	return rt
++}
++
++// GetAllRuntimes returns a copy of the runtimes map
++func (config *Config) GetAllRuntimes() map[string]types.Runtime {
++	config.reloadLock.Lock()
++	rts := config.Runtimes
++	config.reloadLock.Unlock()
++	return rts
++}
+diff --git a/daemon/config_windows.go b/daemon/config_windows.go
+index 2d17b14..f62ae95 100644
+--- a/daemon/config_windows.go
++++ b/daemon/config_windows.go
+@@ -4,6 +4,7 @@ import (
+ 	"os"
+ 
+ 	flag "github.com/docker/docker/pkg/mflag"
++	"github.com/docker/engine-api/types"
+ )
+ 
+ var (
+@@ -40,3 +41,19 @@ func (config *Config) InstallFlags(cmd *flag.FlagSet, usageFn func(string) strin
+ 	cmd.StringVar(&config.bridgeConfig.Iface, []string{"b", "-bridge"}, "", "Attach containers to a virtual switch")
+ 	cmd.StringVar(&config.SocketGroup, []string{"G", "-group"}, "", usageFn("Users or groups that can access the named pipe"))
+ }
++
++// GetRuntime returns the runtime path and arguments for a given
++// runtime name
++func (config *Config) GetRuntime(name string) *types.Runtime {
++	return nil
++}
++
++// GetDefaultRuntimeName returns the current default runtime
++func (config *Config) GetDefaultRuntimeName() string {
++	return types.DefaultRuntimeName
++}
++
++// GetAllRuntimes returns a copy of the runtimes map
++func (config *Config) GetAllRuntimes() map[string]types.Runtime {
++	return map[string]types.Runtime{}
++}
+diff --git a/daemon/daemon.go b/daemon/daemon.go
+index baf1617..9c13af0 100644
+--- a/daemon/daemon.go
++++ b/daemon/daemon.go
+@@ -59,6 +59,10 @@ import (
+ )
+ 
+ var (
++	// DefaultRuntimeBinary is the default runtime to be used by
++	// containerd if none is specified
++	DefaultRuntimeBinary = "docker-runc"
++
+ 	errSystemNotSupported = fmt.Errorf("The Docker daemon is not supported on this platform.")
+ )
+ 
+@@ -785,10 +789,24 @@ func (daemon *Daemon) initDiscovery(config *Config) error {
+ // - Daemon max concurrent uploads
+ // - Cluster discovery (reconfigure and restart).
+ func (daemon *Daemon) Reload(config *Config) error {
++	var err error
++	// used to hold reloaded changes
++	attributes := map[string]string{}
++
++	// We need defer here to ensure the lock is released as
++	// daemon.SystemInfo() will try to get it too
++	defer func() {
++		if err == nil {
++			daemon.LogDaemonEventWithAttributes("reload", attributes)
++		}
++	}()
++
+ 	daemon.configStore.reloadLock.Lock()
+ 	defer daemon.configStore.reloadLock.Unlock()
+ 
+-	if err := daemon.reloadClusterDiscovery(config); err != nil {
++	daemon.platformReload(config, &attributes)
++
++	if err = daemon.reloadClusterDiscovery(config); err != nil {
+ 		return err
+ 	}
+ 
+@@ -826,7 +844,6 @@ func (daemon *Daemon) Reload(config *Config) error {
+ 	}
+ 
+ 	// We emit daemon reload event here with updatable configurations
+-	attributes := map[string]string{}
+ 	attributes["debug"] = fmt.Sprintf("%t", daemon.configStore.Debug)
+ 	attributes["cluster-store"] = daemon.configStore.ClusterStore
+ 	if daemon.configStore.ClusterOpts != nil {
+@@ -844,7 +861,6 @@ func (daemon *Daemon) Reload(config *Config) error {
+ 	}
+ 	attributes["max-concurrent-downloads"] = fmt.Sprintf("%d", *daemon.configStore.MaxConcurrentDownloads)
+ 	attributes["max-concurrent-uploads"] = fmt.Sprintf("%d", *daemon.configStore.MaxConcurrentUploads)
+-	daemon.LogDaemonEventWithAttributes("reload", attributes)
+ 
+ 	return nil
+ }
+diff --git a/daemon/daemon_solaris.go b/daemon/daemon_solaris.go
+index b43ec68..9425255 100644
+--- a/daemon/daemon_solaris.go
++++ b/daemon/daemon_solaris.go
+@@ -73,6 +73,10 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.
+ 	return warnings, nil
+ }
+ 
++// platformReload update configuration with platform specific options
++func (daemon *Daemon) platformReload(config *Config, attributes *map[string]string) {
++}
++
+ // verifyDaemonSettings performs validation of daemon config struct
+ func verifyDaemonSettings(config *Config) error {
+ 	// checkSystem validates platform-specific requirements
+diff --git a/daemon/daemon_unix.go b/daemon/daemon_unix.go
+index ff86ca7..1fb7fa1 100644
+--- a/daemon/daemon_unix.go
++++ b/daemon/daemon_unix.go
+@@ -3,6 +3,7 @@
+ package daemon
+ 
+ import (
++	"bytes"
+ 	"fmt"
+ 	"io/ioutil"
+ 	"net"
+@@ -515,9 +516,42 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.
+ 			return warnings, fmt.Errorf("cgroup-parent for systemd cgroup should be a valid slice named as \"xxx.slice\"")
+ 		}
+ 	}
++	if hostConfig.Runtime == "" {
++		hostConfig.Runtime = daemon.configStore.GetDefaultRuntimeName()
++	}
++
++	if rt := daemon.configStore.GetRuntime(hostConfig.Runtime); rt == nil {
++		return warnings, fmt.Errorf("Unknown runtime specified %s", hostConfig.Runtime)
++	}
++
+ 	return warnings, nil
+ }
+ 
++// platformReload update configuration with platform specific options
++func (daemon *Daemon) platformReload(config *Config, attributes *map[string]string) {
++	if config.IsValueSet("runtimes") {
++		daemon.configStore.Runtimes = config.Runtimes
++		// Always set the default one
++		daemon.configStore.Runtimes[types.DefaultRuntimeName] = types.Runtime{Path: DefaultRuntimeBinary}
++	}
++
++	if config.DefaultRuntime != "" {
++		daemon.configStore.DefaultRuntime = config.DefaultRuntime
++	}
++
++	// Update attributes
++	var runtimeList bytes.Buffer
++	for name, rt := range daemon.configStore.Runtimes {
++		if runtimeList.Len() > 0 {
++			runtimeList.WriteRune(' ')
++		}
++		runtimeList.WriteString(fmt.Sprintf("%s:%s", name, rt))
++	}
++
++	(*attributes)["runtimes"] = runtimeList.String()
++	(*attributes)["default-runtime"] = daemon.configStore.DefaultRuntime
++}
++
+ // verifyDaemonSettings performs validation of daemon config struct
+ func verifyDaemonSettings(config *Config) error {
+ 	// Check for mutually incompatible config options
+@@ -538,6 +572,15 @@ func verifyDaemonSettings(config *Config) error {
+ 			return fmt.Errorf("cgroup-parent for systemd cgroup should be a valid slice named as \"xxx.slice\"")
+ 		}
+ 	}
++
++	if config.DefaultRuntime == "" {
++		config.DefaultRuntime = types.DefaultRuntimeName
++	}
++	if config.Runtimes == nil {
++		config.Runtimes = make(map[string]types.Runtime)
++	}
++	config.Runtimes[types.DefaultRuntimeName] = types.Runtime{Path: DefaultRuntimeBinary}
++
+ 	return nil
+ }
+ 
+diff --git a/daemon/daemon_windows.go b/daemon/daemon_windows.go
+index 1f9429a..62a6bb4 100644
+--- a/daemon/daemon_windows.go
++++ b/daemon/daemon_windows.go
+@@ -156,6 +156,10 @@ func verifyPlatformContainerSettings(daemon *Daemon, hostConfig *containertypes.
+ 	return warnings, nil
+ }
+ 
++// platformReload update configuration with platform specific options
++func (daemon *Daemon) platformReload(config *Config, attributes *map[string]string) {
++}
++
+ // verifyDaemonSettings performs validation of daemon config struct
+ func verifyDaemonSettings(config *Config) error {
+ 	return nil
+diff --git a/daemon/info.go b/daemon/info.go
+index 433f924..00d659a 100644
+--- a/daemon/info.go
++++ b/daemon/info.go
+@@ -131,6 +131,8 @@ func (daemon *Daemon) SystemInfo() (*types.Info, error) {
+ 		v.CPUCfsQuota = sysInfo.CPUCfsQuota
+ 		v.CPUShares = sysInfo.CPUShares
+ 		v.CPUSet = sysInfo.Cpuset
++		v.Runtimes = daemon.configStore.GetAllRuntimes()
++		v.DefaultRuntime = daemon.configStore.GetDefaultRuntimeName()
+ 	}
+ 
+ 	hostname := ""
+diff --git a/daemon/start.go b/daemon/start.go
+index 89525d4..7ced9e1 100644
+--- a/daemon/start.go
++++ b/daemon/start.go
+@@ -132,15 +132,25 @@ func (daemon *Daemon) containerStart(container *container.Container) (err error)
+ 		return err
+ 	}
+ 
+-	if err := daemon.containerd.Create(container.ID, *spec, libcontainerd.WithRestartManager(container.RestartManager(true))); err != nil {
++	createOptions := []libcontainerd.CreateOption{libcontainerd.WithRestartManager(container.RestartManager(true))}
++	copts, err := daemon.getLibcontainerdCreateOptions(container)
++	if err != nil {
++		return err
++	}
++	if copts != nil {
++		createOptions = append(createOptions, *copts...)
++	}
++
++	if err := daemon.containerd.Create(container.ID, *spec, createOptions...); err != nil {
+ 		errDesc := grpc.ErrorDesc(err)
+ 		logrus.Errorf("Create container failed with error: %s", errDesc)
+ 		// if we receive an internal error from the initial start of a container then lets
+ 		// return it instead of entering the restart loop
+ 		// set to 127 for container cmd not found/does not exist)
+-		if strings.Contains(errDesc, "executable file not found") ||
+-			strings.Contains(errDesc, "no such file or directory") ||
+-			strings.Contains(errDesc, "system cannot find the file specified") {
++		if strings.Contains(errDesc, container.Path) &&
++			(strings.Contains(errDesc, "executable file not found") ||
++				strings.Contains(errDesc, "no such file or directory") ||
++				strings.Contains(errDesc, "system cannot find the file specified")) {
+ 			container.ExitCode = 127
+ 		}
+ 		// set to 126 for container cmd can't be invoked errors
+diff --git a/daemon/start_linux.go b/daemon/start_linux.go
+new file mode 100644
+index 0000000..50a9148
+--- /dev/null
++++ b/daemon/start_linux.go
+@@ -0,0 +1,20 @@
++package daemon
++
++import (
++	"fmt"
++
++	"github.com/docker/docker/container"
++	"github.com/docker/docker/libcontainerd"
++)
++
++func (daemon *Daemon) getLibcontainerdCreateOptions(container *container.Container) (*[]libcontainerd.CreateOption, error) {
++	createOptions := []libcontainerd.CreateOption{}
++
++	rt := daemon.configStore.GetRuntime(container.HostConfig.Runtime)
++	if rt == nil {
++		return nil, fmt.Errorf("No such runtime '%s'", container.HostConfig.Runtime)
++	}
++	createOptions = append(createOptions, libcontainerd.WithRuntime(rt.Path, rt.Args))
++
++	return &createOptions, nil
++}
+diff --git a/daemon/start_windows.go b/daemon/start_windows.go
+new file mode 100644
+index 0000000..af3fe76
+--- /dev/null
++++ b/daemon/start_windows.go
+@@ -0,0 +1,10 @@
++package daemon
++
++import (
++	"github.com/docker/docker/container"
++	"github.com/docker/docker/libcontainerd"
++)
++
++func (daemon *Daemon) getLibcontainerdCreateOptions(container *container.Container) (*[]libcontainerd.CreateOption, error) {
++	return &[]libcontainerd.CreateOption{}, nil
++}
+diff --git a/docs/reference/commandline/create.md b/docs/reference/commandline/create.md
+index 03d3779..3fc5a13 100644
+--- a/docs/reference/commandline/create.md
++++ b/docs/reference/commandline/create.md
+@@ -78,6 +78,7 @@ Creates a new container.
+       --privileged                  Give extended privileges to this container
+       --read-only                   Mount the container's root filesystem as read only
+       --restart="no"                Restart policy (no, on-failure[:max-retry], always, unless-stopped)
++      --runtime=""                  Name of the runtime to be used for that container (available runtimes are listed in `docker info`)
+       --security-opt=[]             Security options
+       --stop-signal="SIGTERM"       Signal to stop a container
+       --shm-size=[]                 Size of `/dev/shm`. The format is `<number><unit>`. `number` must be greater than `0`.  Unit is optional and can be `b` (bytes), `k` (kilobytes), `m` (megabytes), or `g` (gigabytes). If you omit the unit, the system uses bytes. If you omit the size entirely, the system uses `64m`.
+diff --git a/docs/reference/commandline/dockerd.md b/docs/reference/commandline/dockerd.md
+index a170e1c..ec50f61 100644
+--- a/docs/reference/commandline/dockerd.md
++++ b/docs/reference/commandline/dockerd.md
+@@ -60,6 +60,7 @@ weight = -1
+       -p, --pidfile="/var/run/docker.pid"    Path to use for daemon PID file
+       --raw-logs                             Full timestamps without ANSI coloring
+       --registry-mirror=[]                   Preferred Docker registry mirror
++      --add-runtime=[]                       Register an additional OCI compatible runtime
+       -s, --storage-driver=""                Storage driver to use
+       --selinux-enabled                      Enable selinux support
+       --storage-opt=[]                       Set storage driver options
+@@ -947,7 +948,19 @@ This is a full example of the allowed configuration options in the file:
+ 	"raw-logs": false,
+ 	"registry-mirrors": [],
+ 	"insecure-registries": [],
+-	"disable-legacy-registry": false
++	"disable-legacy-registry": false,
++	"default-runtime": "foo",
++	"runtimes": {
++		"foo": {
++			"path": "runc"
++		},
++		"bar": {
++			"path": "/usr/local/bin/my-runc-replacement",
++			"runtimeArgs": [
++				"--debug"
++			]
++		}
++	}
+ }
+ ```
+ 
+@@ -969,6 +982,11 @@ The list of currently supported options that can be reconfigured is this:
+ - `labels`: it replaces the daemon labels with a new set of labels.
+ - `max-concurrent-downloads`: it updates the max concurrent downloads for each pull.
+ - `max-concurrent-uploads`: it updates the max concurrent uploads for each push.
++- `default-runtime`: it updates the runtime to be used if not is
++  specified at container creation. It defaults to "default" which is
++  the runtime shipped with the official docker packages.
++- `runtimes`: it updates the list of available OCI runtimes that can
++  be used to run containers
+ 
+ Updating and reloading the cluster configurations such as `--cluster-store`,
+ `--cluster-advertise` and `--cluster-store-opts` will take effect only if
+diff --git a/docs/reference/commandline/run.md b/docs/reference/commandline/run.md
+index 6b66c39..8039fca 100644
+--- a/docs/reference/commandline/run.md
++++ b/docs/reference/commandline/run.md
+@@ -89,6 +89,7 @@ parent = "smn_cli"
+       --read-only                   Mount the container's root filesystem as read only
+       --restart="no"                Restart policy (no, on-failure[:max-retry], always, unless-stopped)
+       --rm                          Automatically remove the container when it exits
++      --runtime=""                  Name of the runtime to be used for that container (available runtimes are listed in `docker info`)
+       --shm-size=[]                 Size of `/dev/shm`. The format is `<number><unit>`. `number` must be greater than `0`.  Unit is optional and can be `b` (bytes), `k` (kilobytes), `m` (megabytes), or `g` (gigabytes). If you omit the unit, the system uses bytes. If you omit the size entirely, the system uses `64m`.
+       --security-opt=[]             Security Options
+       --sig-proxy=true              Proxy received signals to the process
+diff --git a/integration-cli/docker_cli_daemon_test.go b/integration-cli/docker_cli_daemon_test.go
+index 9546f3b..363bca3 100644
+--- a/integration-cli/docker_cli_daemon_test.go
++++ b/integration-cli/docker_cli_daemon_test.go
+@@ -2378,3 +2378,183 @@ func (s *DockerDaemonSuite) TestDaemonDnsOptionsInHostMode(c *check.C) {
+ 	out, _ := s.d.Cmd("run", "--net=host", "busybox", "cat", "/etc/resolv.conf")
+ 	c.Assert(out, checker.Contains, expectedOutput, check.Commentf("Expected '%s', but got %q", expectedOutput, out))
+ }
++
++func (s *DockerDaemonSuite) TestRunWithRuntimeFromConfigFile(c *check.C) {
++	conf, err := ioutil.TempFile("", "config-file-")
++	c.Assert(err, check.IsNil)
++	configName := conf.Name()
++	conf.Close()
++	defer os.Remove(configName)
++
++	config := `
++{
++    "runtimes": {
++        "oci": {
++            "path": "docker-runc"
++        },
++        "vm": {
++            "path": "/usr/local/bin/vm-manager",
++            "runtimeArgs": [
++                "--debug"
++            ]
++        }
++    }
++}
++`
++	ioutil.WriteFile(configName, []byte(config), 0644)
++	err = s.d.Start("--config-file", configName)
++	c.Assert(err, check.IsNil)
++
++	// Run with default runtime
++	out, err := s.d.Cmd("run", "--rm", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with default runtime explicitely
++	out, err = s.d.Cmd("run", "--rm", "--runtime=default", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with oci (same path as default) but keep it around
++	out, err = s.d.Cmd("run", "--name", "oci-runtime-ls", "--runtime=oci", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with "vm"
++	out, err = s.d.Cmd("run", "--rm", "--runtime=vm", "busybox", "ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "/usr/local/bin/vm-manager: no such file or directory")
++
++	// Reset config to only have the default
++	config = `
++{
++    "runtimes": {
++    }
++}
++`
++	ioutil.WriteFile(configName, []byte(config), 0644)
++	syscall.Kill(s.d.cmd.Process.Pid, syscall.SIGHUP)
++	// Give daemon time to reload config
++	<-time.After(1 * time.Second)
++
++	// Run with default runtime
++	out, err = s.d.Cmd("run", "--rm", "--runtime=default", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with "oci"
++	out, err = s.d.Cmd("run", "--rm", "--runtime=oci", "busybox", "ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "Unknown runtime specified oci")
++
++	// Start previously created container with oci
++	out, err = s.d.Cmd("start", "oci-runtime-ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "Unknown runtime specified oci")
++
++	// Check that we can't override the default runtime
++	config = `
++{
++    "runtimes": {
++        "default": {
++            "path": "docker-runc"
++        }
++    }
++}
++`
++	ioutil.WriteFile(configName, []byte(config), 0644)
++	syscall.Kill(s.d.cmd.Process.Pid, syscall.SIGHUP)
++	// Give daemon time to reload config
++	<-time.After(1 * time.Second)
++
++	content, _ := ioutil.ReadFile(s.d.logFile.Name())
++	c.Assert(string(content), checker.Contains, `file configuration validation failed (runtime name 'default' is reserved)`)
++
++	// Check that we can select a default runtime
++	config = `
++{
++    "default-runtime": "vm",
++    "runtimes": {
++        "oci": {
++            "path": "docker-runc"
++        },
++        "vm": {
++            "path": "/usr/local/bin/vm-manager",
++            "runtimeArgs": [
++                "--debug"
++            ]
++        }
++    }
++}
++`
++	ioutil.WriteFile(configName, []byte(config), 0644)
++	syscall.Kill(s.d.cmd.Process.Pid, syscall.SIGHUP)
++	// Give daemon time to reload config
++	<-time.After(1 * time.Second)
++
++	out, err = s.d.Cmd("run", "--rm", "busybox", "ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "/usr/local/bin/vm-manager: no such file or directory")
++
++	// Run with default runtime explicitely
++	out, err = s.d.Cmd("run", "--rm", "--runtime=default", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++}
++
++func (s *DockerDaemonSuite) TestRunWithRuntimeFromCommandLine(c *check.C) {
++	err := s.d.Start("--add-runtime", "oci=docker-runc", "--add-runtime", "vm=/usr/local/bin/vm-manager")
++	c.Assert(err, check.IsNil)
++
++	// Run with default runtime
++	out, err := s.d.Cmd("run", "--rm", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with default runtime explicitely
++	out, err = s.d.Cmd("run", "--rm", "--runtime=default", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with oci (same path as default) but keep it around
++	out, err = s.d.Cmd("run", "--name", "oci-runtime-ls", "--runtime=oci", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with "vm"
++	out, err = s.d.Cmd("run", "--rm", "--runtime=vm", "busybox", "ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "/usr/local/bin/vm-manager: no such file or directory")
++
++	// Start a daemon without any extra runtimes
++	s.d.Stop()
++	err = s.d.Start()
++	c.Assert(err, check.IsNil)
++
++	// Run with default runtime
++	out, err = s.d.Cmd("run", "--rm", "--runtime=default", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++
++	// Run with "oci"
++	out, err = s.d.Cmd("run", "--rm", "--runtime=oci", "busybox", "ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "Unknown runtime specified oci")
++
++	// Start previously created container with oci
++	out, err = s.d.Cmd("start", "oci-runtime-ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "Unknown runtime specified oci")
++
++	// Check that we can't override the default runtime
++	s.d.Stop()
++	err = s.d.Start("--add-runtime", "default=docker-runc")
++	c.Assert(err, check.NotNil)
++
++	content, _ := ioutil.ReadFile(s.d.logFile.Name())
++	c.Assert(string(content), checker.Contains, `runtime name 'default' is reserved`)
++
++	// Check that we can select a default runtime
++	s.d.Stop()
++	err = s.d.Start("--default-runtime=vm", "--add-runtime", "oci=docker-runc", "--add-runtime", "vm=/usr/local/bin/vm-manager")
++	c.Assert(err, check.IsNil)
++
++	out, err = s.d.Cmd("run", "--rm", "busybox", "ls")
++	c.Assert(err, check.NotNil, check.Commentf(out))
++	c.Assert(out, checker.Contains, "/usr/local/bin/vm-manager: no such file or directory")
++
++	// Run with default runtime explicitely
++	out, err = s.d.Cmd("run", "--rm", "--runtime=default", "busybox", "ls")
++	c.Assert(err, check.IsNil, check.Commentf(out))
++}
+diff --git a/integration-cli/docker_cli_events_unix_test.go b/integration-cli/docker_cli_events_unix_test.go
+index 49c7533..b7b27c5 100644
+--- a/integration-cli/docker_cli_events_unix_test.go
++++ b/integration-cli/docker_cli_events_unix_test.go
+@@ -408,7 +408,8 @@ func (s *DockerDaemonSuite) TestDaemonEvents(c *check.C) {
+ 
+ 	out, err = s.d.Cmd("events", "--since=0", "--until", daemonUnixTime(c))
+ 	c.Assert(err, checker.IsNil)
+-	c.Assert(out, checker.Contains, fmt.Sprintf("daemon reload %s (cluster-advertise=, cluster-store=, cluster-store-opts={}, debug=true, labels=[\"bar=foo\"], max-concurrent-downloads=1, max-concurrent-uploads=5, name=%s)", daemonID, daemonName))
++
++	c.Assert(out, checker.Contains, fmt.Sprintf("daemon reload %s (cluster-advertise=, cluster-store=, cluster-store-opts={}, debug=true, default-runtime=default, labels=[\"bar=foo\"], max-concurrent-downloads=1, max-concurrent-uploads=5, name=%s, runtimes=default:{docker-runc []})", daemonID, daemonName))
+ }
+ 
+ func (s *DockerDaemonSuite) TestDaemonEventsWithFilters(c *check.C) {
+diff --git a/integration-cli/docker_cli_info_test.go b/integration-cli/docker_cli_info_test.go
+index 2e34005..816cbfd 100644
+--- a/integration-cli/docker_cli_info_test.go
++++ b/integration-cli/docker_cli_info_test.go
+@@ -34,6 +34,10 @@ func (s *DockerSuite) TestInfoEnsureSucceeds(c *check.C) {
+ 		"Network:",
+ 	}
+ 
++	if DaemonIsLinux.Condition() {
++		stringsToCheck = append(stringsToCheck, "Runtimes:", "Default Runtime: default")
++	}
++
+ 	if utils.ExperimentalBuild() {
+ 		stringsToCheck = append(stringsToCheck, "Experimental: true")
+ 	}
+diff --git a/libcontainerd/container_linux.go b/libcontainerd/container_linux.go
+index adf6bff..9bb646d 100644
+--- a/libcontainerd/container_linux.go
++++ b/libcontainerd/container_linux.go
+@@ -20,7 +20,27 @@ type container struct {
+ 
+ 	// Platform specific fields are below here.
+ 	pauseMonitor
+-	oom bool
++	oom         bool
++	runtime     string
++	runtimeArgs []string
++}
++
++type runtime struct {
++	path string
++	args []string
++}
++
++// WithRuntime sets the runtime to be used for the created container
++func WithRuntime(path string, args []string) CreateOption {
++	return runtime{path, args}
++}
++
++func (rt runtime) Apply(p interface{}) error {
++	if pr, ok := p.(*container); ok {
++		pr.runtime = rt.path
++		pr.runtimeArgs = rt.args
++	}
++	return nil
+ }
+ 
+ func (ctr *container) clean() error {
+@@ -83,6 +103,8 @@ func (ctr *container) start() error {
+ 		Stderr:     ctr.fifo(syscall.Stderr),
+ 		// check to see if we are running in ramdisk to disable pivot root
+ 		NoPivotRoot: os.Getenv("DOCKER_RAMDISK") != "",
++		Runtime:     ctr.runtime,
++		RuntimeArgs: ctr.runtimeArgs,
+ 	}
+ 	ctr.client.appendContainer(ctr)
+ 
+diff --git a/libcontainerd/remote_linux.go b/libcontainerd/remote_linux.go
+index 1a6ccf3..dca958d 100644
+--- a/libcontainerd/remote_linux.go
++++ b/libcontainerd/remote_linux.go
+@@ -50,6 +50,7 @@ type remote struct {
+ 	clients       []*client
+ 	eventTsPath   string
+ 	pastEvents    map[string]*containerd.Event
++	runtime       string
+ 	runtimeArgs   []string
+ 	daemonWaitCh  chan struct{}
+ }
+@@ -355,10 +356,13 @@ func (r *remote) runContainerdDaemon() error {
+ 	args := []string{
+ 		"-l", fmt.Sprintf("unix://%s", r.rpcAddr),
+ 		"--shim", "docker-containerd-shim",
+-		"--runtime", "docker-runc",
+ 		"--metrics-interval=0",
+ 		"--state-dir", filepath.Join(r.stateDir, containerdStateDir),
+ 	}
++	if r.runtime != "" {
++		args = append(args, "--runtime")
++		args = append(args, r.runtime)
++	}
+ 	if r.debugLog {
+ 		args = append(args, "--debug")
+ 	}
+@@ -416,6 +420,22 @@ func (a rpcAddr) Apply(r Remote) error {
+ 	return fmt.Errorf("WithRemoteAddr option not supported for this remote")
+ }
+ 
++// WithRuntimePath sets the path of the runtime to be used as the
++// default by containerd
++func WithRuntimePath(rt string) RemoteOption {
++	return runtimePath(rt)
++}
++
++type runtimePath string
++
++func (rt runtimePath) Apply(r Remote) error {
++	if remote, ok := r.(*remote); ok {
++		remote.runtime = string(rt)
++		return nil
++	}
++	return fmt.Errorf("WithRuntime option not supported for this remote")
++}
++
+ // WithRuntimeArgs sets the list of runtime args passed to containerd
+ func WithRuntimeArgs(args []string) RemoteOption {
+ 	return runtimeArgs(args)
+diff --git a/runconfig/opts/parse.go b/runconfig/opts/parse.go
+index 77254e0..4f1b533 100644
+--- a/runconfig/opts/parse.go
++++ b/runconfig/opts/parse.go
+@@ -101,6 +101,7 @@ type ContainerOptions struct {
+ 	flHealthInterval    *time.Duration
+ 	flHealthTimeout     *time.Duration
+ 	flHealthRetries     *int
++	flRuntime           *string
+ 
+ 	Image string
+ 	Args  []string
+@@ -189,6 +190,7 @@ func AddFlags(flags *pflag.FlagSet) *ContainerOptions {
+ 		flHealthInterval:    flags.Duration("health-interval", 0, "Time between running the check"),
+ 		flHealthTimeout:     flags.Duration("health-timeout", 0, "Maximum time to allow one check to run"),
+ 		flHealthRetries:     flags.Int("health-retries", 0, "Consecutive failures needed to report unhealthy"),
++		flRuntime:           flags.String("runtime", "", "Runtime to use for this container"),
+ 	}
+ 
+ 	flags.VarP(&copts.flAttach, "attach", "a", "Attach to STDIN, STDOUT or STDERR")
+@@ -229,7 +231,6 @@ func AddFlags(flags *pflag.FlagSet) *ContainerOptions {
+ // a HostConfig and returns them with the specified command.
+ // If the specified args are not valid, it will return an error.
+ func Parse(flags *pflag.FlagSet, copts *ContainerOptions) (*container.Config, *container.HostConfig, *networktypes.NetworkingConfig, error) {
+-
+ 	var (
+ 		attachStdin  = copts.flAttach.Get("stdin")
+ 		attachStdout = copts.flAttach.Get("stdout")
+@@ -564,6 +565,7 @@ func Parse(flags *pflag.FlagSet, copts *ContainerOptions) (*container.Config, *c
+ 		Resources:      resources,
+ 		Tmpfs:          tmpfs,
+ 		Sysctls:        copts.flSysctls.GetAll(),
++		Runtime:        *copts.flRuntime,
+ 	}
+ 
+ 	// When allocating stdin in attached mode, close stdin at client disconnect
+diff --git a/runconfig/opts/runtime.go b/runconfig/opts/runtime.go
+new file mode 100644
+index 0000000..8302eb1
+--- /dev/null
++++ b/runconfig/opts/runtime.go
+@@ -0,0 +1,73 @@
++package opts
++
++import (
++	"fmt"
++	"strings"
++
++	"github.com/docker/engine-api/types"
++)
++
++// RuntimeOpt defines a map of Runtimes
++type RuntimeOpt struct {
++	name   string
++	values *map[string]types.Runtime
++}
++
++// NewNamedRuntimeOpt creates a new RuntimeOpt
++func NewNamedRuntimeOpt(name string, ref *map[string]types.Runtime) *RuntimeOpt {
++	if ref == nil {
++		ref = &map[string]types.Runtime{}
++	}
++	return &RuntimeOpt{name: name, values: ref}
++}
++
++// Name returns the name of the NamedListOpts in the configuration.
++func (o *RuntimeOpt) Name() string {
++	return o.name
++}
++
++// Set validates and updates the list of Runtimes
++func (o *RuntimeOpt) Set(val string) error {
++	parts := strings.SplitN(val, "=", 2)
++	if len(parts) != 2 {
++		return fmt.Errorf("invalid runtime argument: %s", val)
++	}
++
++	parts[0] = strings.TrimSpace(parts[0])
++	parts[1] = strings.TrimSpace(parts[1])
++	if parts[0] == "" || parts[1] == "" {
++		return fmt.Errorf("invalid runtime argument: %s", val)
++	}
++
++	parts[0] = strings.ToLower(parts[0])
++	if parts[0] == types.DefaultRuntimeName {
++		return fmt.Errorf("runtime name 'default' is reserved")
++	}
++
++	if _, ok := (*o.values)[parts[0]]; ok {
++		return fmt.Errorf("runtime '%s' was already defined", parts[0])
++	}
++
++	(*o.values)[parts[0]] = types.Runtime{Path: parts[1]}
++
++	return nil
++}
++
++// String returns Runtime values as a string.
++func (o *RuntimeOpt) String() string {
++	var out []string
++	for k := range *o.values {
++		out = append(out, k)
++	}
++
++	return fmt.Sprintf("%v", out)
++}
++
++// GetMap returns a map of Runtimes (name: path)
++func (o *RuntimeOpt) GetMap() map[string]types.Runtime {
++	if o.values != nil {
++		return *o.values
++	}
++
++	return map[string]types.Runtime{}
++}
+-- 
+2.8.2
+
