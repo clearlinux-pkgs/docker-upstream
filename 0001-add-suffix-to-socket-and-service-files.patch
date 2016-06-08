@@ -1,4 +1,4 @@
-From 0c21989d6fb91af0dbc356665ffc20d5c979e46f Mon Sep 17 00:00:00 2001
+From 717c4dd84cfae5c65116ae9c6add74972af18087 Mon Sep 17 00:00:00 2001
 From: Julio Montes <julio.montes@intel.com>
 Date: Mon, 6 Jun 2016 16:17:07 -0500
 Subject: [PATCH] add suffix to socket and service files
@@ -17,7 +17,7 @@ Signed-off-by: Julio Montes <julio.montes@intel.com>
 
 diff --git a/contrib/init/systemd/docker-upstream.service b/contrib/init/systemd/docker-upstream.service
 new file mode 100644
-index 0000000..ac0c5f4
+index 0000000..719b4ca
 --- /dev/null
 +++ b/contrib/init/systemd/docker-upstream.service
 @@ -0,0 +1,25 @@
