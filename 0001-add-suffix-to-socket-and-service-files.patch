@@ -1,15 +1,15 @@
-From 717c4dd84cfae5c65116ae9c6add74972af18087 Mon Sep 17 00:00:00 2001
+From b2415097b4eb494eae12f02be67cde0cdbeb563e Mon Sep 17 00:00:00 2001
 From: Julio Montes <julio.montes@intel.com>
-Date: Mon, 6 Jun 2016 16:17:07 -0500
+Date: Thu, 30 Jun 2016 10:15:36 -0500
 Subject: [PATCH] add suffix to socket and service files
 
 Signed-off-by: Julio Montes <julio.montes@intel.com>
 ---
- contrib/init/systemd/docker-upstream.service | 25 +++++++++++++++++++++++++
+ contrib/init/systemd/docker-upstream.service | 27 +++++++++++++++++++++++++++
  contrib/init/systemd/docker-upstream.socket  | 12 ++++++++++++
- contrib/init/systemd/docker.service          | 25 -------------------------
+ contrib/init/systemd/docker.service          | 27 ---------------------------
  contrib/init/systemd/docker.socket           | 12 ------------
- 4 files changed, 37 insertions(+), 37 deletions(-)
+ 4 files changed, 39 insertions(+), 39 deletions(-)
  create mode 100644 contrib/init/systemd/docker-upstream.service
  create mode 100644 contrib/init/systemd/docker-upstream.socket
  delete mode 100644 contrib/init/systemd/docker.service
@@ -17,10 +17,10 @@ Signed-off-by: Julio Montes <julio.montes@intel.com>
 
 diff --git a/contrib/init/systemd/docker-upstream.service b/contrib/init/systemd/docker-upstream.service
 new file mode 100644
-index 0000000..719b4ca
+index 0000000..a6e382a
 --- /dev/null
 +++ b/contrib/init/systemd/docker-upstream.service
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,27 @@
 +[Unit]
 +Description=Docker Application Container Engine
 +Documentation=https://docs.docker.com
@@ -43,12 +43,14 @@ index 0000000..719b4ca
 +TimeoutStartSec=0
 +# set delegate yes so that systemd does not reset the cgroups of docker containers
 +Delegate=yes
++# kill only the docker process, not all processes in the cgroup
++KillMode=process
 +
 +[Install]
 +WantedBy=multi-user.target
 diff --git a/contrib/init/systemd/docker-upstream.socket b/contrib/init/systemd/docker-upstream.socket
 new file mode 100644
-index 0000000..7dd9509
+index 0000000..31c86a5
 --- /dev/null
 +++ b/contrib/init/systemd/docker-upstream.socket
 @@ -0,0 +1,12 @@
@@ -66,10 +68,10 @@ index 0000000..7dd9509
 +WantedBy=sockets.target
 diff --git a/contrib/init/systemd/docker.service b/contrib/init/systemd/docker.service
 deleted file mode 100644
-index 9b0ce63..0000000
+index 92d7246..0000000
 --- a/contrib/init/systemd/docker.service
 +++ /dev/null
-@@ -1,25 +0,0 @@
+@@ -1,27 +0,0 @@
 -[Unit]
 -Description=Docker Application Container Engine
 -Documentation=https://docs.docker.com
@@ -92,6 +94,8 @@ index 9b0ce63..0000000
 -TimeoutStartSec=0
 -# set delegate yes so that systemd does not reset the cgroups of docker containers
 -Delegate=yes
+-# kill only the docker process, not all processes in the cgroup
+-KillMode=process
 -
 -[Install]
 -WantedBy=multi-user.target

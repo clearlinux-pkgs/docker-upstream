@@ -1,8 +1,8 @@
 Name     : docker-upstream
 Version  : 1.12.0
-Release  : 5
-URL      : https://github.com/docker/docker/archive/3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8.tar.gz
-Source0  : https://github.com/docker/docker/archive/3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8.tar.gz
+Release  : 6
+URL      : https://github.com/docker/docker/archive/e8439971b42a65dd831f80ec76a38e8c8e938cb6.tar.gz
+Source0  : https://github.com/docker/docker/archive/e8439971b42a65dd831f80ec76a38e8c8e938cb6.tar.gz
 Summary  : the open-source application container engine
 Group    : Development/Tools
 License  : Apache-2.0
@@ -17,10 +17,6 @@ Requires : containerd
 Requires : runc
 Conflicts : docker
 Patch1    : 0001-add-suffix-to-socket-and-service-files.patch
-Patch2 : 0002-Vendor-in-new-containerd-version.patch
-Patch3 : 0003-Add-support-for-multiples-runtimes.patch
-Patch4 : 0004-Add-missing-completion-for-config-file.patch
-Patch5 : 0005-Add-bash-completion-support-for-runtime-and-add-runt.patch
 
 # don't strip, these are not ordinary object files
 %global __os_install_post %{nil}
@@ -30,18 +26,14 @@ Patch5 : 0005-Add-bash-completion-support-for-runtime-and-add-runt.patch
 %global gopath /usr/lib/golang
 %global library_path github.com/docker/
 
-%global commit_id 3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8
+%global commit_id e8439971b42a65dd831f80ec76a38e8c8e938cb6
 
 %description
 Docker is an open source project to pack, ship and run any application as a lightweight container.
 
 %prep
-%setup -q -n docker-3d80884f3d7d60c51c0ccd6b487ebbeb98d2f7e8
+%setup -q -n docker-e8439971b42a65dd831f80ec76a38e8c8e938cb6
 %patch1 -p1
-%patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
 
 %build
 mkdir -p src/github.com/docker/
