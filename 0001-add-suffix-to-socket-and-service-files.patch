@@ -1,15 +1,15 @@
-From b2415097b4eb494eae12f02be67cde0cdbeb563e Mon Sep 17 00:00:00 2001
+From 3d2d853b6ab9ad225bcaf46c83094022aa5e0993 Mon Sep 17 00:00:00 2001
 From: Julio Montes <julio.montes@intel.com>
-Date: Thu, 30 Jun 2016 10:15:36 -0500
+Date: Wed, 13 Jul 2016 13:55:03 -0500
 Subject: [PATCH] add suffix to socket and service files
 
 Signed-off-by: Julio Montes <julio.montes@intel.com>
 ---
- contrib/init/systemd/docker-upstream.service | 27 +++++++++++++++++++++++++++
+ contrib/init/systemd/docker-upstream.service | 29 ++++++++++++++++++++++++++++
  contrib/init/systemd/docker-upstream.socket  | 12 ++++++++++++
- contrib/init/systemd/docker.service          | 27 ---------------------------
+ contrib/init/systemd/docker.service          | 29 ----------------------------
  contrib/init/systemd/docker.socket           | 12 ------------
- 4 files changed, 39 insertions(+), 39 deletions(-)
+ 4 files changed, 41 insertions(+), 41 deletions(-)
  create mode 100644 contrib/init/systemd/docker-upstream.service
  create mode 100644 contrib/init/systemd/docker-upstream.socket
  delete mode 100644 contrib/init/systemd/docker.service
@@ -17,10 +17,10 @@ Signed-off-by: Julio Montes <julio.montes@intel.com>
 
 diff --git a/contrib/init/systemd/docker-upstream.service b/contrib/init/systemd/docker-upstream.service
 new file mode 100644
-index 0000000..a6e382a
+index 0000000..2ad1b25
 --- /dev/null
 +++ b/contrib/init/systemd/docker-upstream.service
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,29 @@
 +[Unit]
 +Description=Docker Application Container Engine
 +Documentation=https://docs.docker.com
@@ -34,8 +34,10 @@ index 0000000..a6e382a
 +# for containers run by docker
 +ExecStart=/usr/bin/dockerd-upstream -H fd://
 +ExecReload=/bin/kill -s HUP $MAINPID
-+LimitNOFILE=1048576
-+LimitNPROC=1048576
++# Having non-zero Limit*s causes performance problems due to accounting overhead
++# in the kernel. We recommend using cgroups to do container-local accounting.
++LimitNOFILE=infinity
++LimitNPROC=infinity
 +LimitCORE=infinity
 +# Uncomment TasksMax if your systemd version supports it.
 +# Only systemd 226 and above support this version.
@@ -68,10 +70,10 @@ index 0000000..31c86a5
 +WantedBy=sockets.target
 diff --git a/contrib/init/systemd/docker.service b/contrib/init/systemd/docker.service
 deleted file mode 100644
-index 92d7246..0000000
+index c3f3472..0000000
 --- a/contrib/init/systemd/docker.service
 +++ /dev/null
-@@ -1,27 +0,0 @@
+@@ -1,29 +0,0 @@
 -[Unit]
 -Description=Docker Application Container Engine
 -Documentation=https://docs.docker.com
@@ -85,8 +87,10 @@ index 92d7246..0000000
 -# for containers run by docker
 -ExecStart=/usr/bin/dockerd -H fd://
 -ExecReload=/bin/kill -s HUP $MAINPID
--LimitNOFILE=1048576
--LimitNPROC=1048576
+-# Having non-zero Limit*s causes performance problems due to accounting overhead
+-# in the kernel. We recommend using cgroups to do container-local accounting.
+-LimitNOFILE=infinity
+-LimitNPROC=infinity
 -LimitCORE=infinity
 -# Uncomment TasksMax if your systemd version supports it.
 -# Only systemd 226 and above support this version.

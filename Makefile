@@ -1,4 +1,4 @@
 PKG_NAME := docker-upstream
-URL := https://github.com/docker/docker/archive/e8439971b42a65dd831f80ec76a38e8c8e938cb6.tar.gz
+URL := https://github.com/docker/docker/archive/v1.12.0-rc4.tar.gz
 
 include ../common/Makefile.common
