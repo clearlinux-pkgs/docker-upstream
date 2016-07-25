@@ -1,8 +1,9 @@
 Name     : docker-upstream
 Version  : 1.12.0
-Release  : 8
+Release  : 9
 URL      : https://github.com/docker/docker/archive/v1.12.0-rc4.tar.gz
 Source0  : https://github.com/docker/docker/archive/v1.12.0-rc4.tar.gz
+Source1  : docker-upstream.service
 Summary  : the open-source application container engine
 Group    : Development/Tools
 License  : Apache-2.0
@@ -56,7 +57,7 @@ ln -s /usr/bin/containerd-ctr %{buildroot}/%{_bindir}/docker-containerd-ctr
 ln -s /usr/bin/runc %{buildroot}/%{_bindir}/docker-runc
 
 # install systemd unit files
-install -m 0644 -D ./contrib/init/systemd/docker-upstream.service %{buildroot}%{_prefix}/lib/systemd/system/docker-upstream.service
+install -m 0644 -D %{SOURCE1} %{buildroot}%{_prefix}/lib/systemd/system/docker-upstream.service
 install -m 0644 -D ./contrib/init/systemd/docker-upstream.socket %{buildroot}%{_prefix}/lib/systemd/system/docker-upstream.socket
 mkdir -p %{buildroot}/usr/lib/systemd/system/sockets.target.wants
 ln -s ../docker-upstream.socket %{buildroot}/usr/lib/systemd/system/sockets.target.wants/docker-upstream.socket
