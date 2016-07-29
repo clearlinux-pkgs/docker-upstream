@@ -1,9 +1,8 @@
 Name     : docker-upstream
 Version  : 1.12.0
-Release  : 9
-URL      : https://github.com/docker/docker/archive/v1.12.0-rc4.tar.gz
-Source0  : https://github.com/docker/docker/archive/v1.12.0-rc4.tar.gz
-Source1  : docker-upstream.service
+Release  : 10
+URL      : https://github.com/docker/docker/archive/v1.12.0.tar.gz
+Source0  : https://github.com/docker/docker/archive/v1.12.0.tar.gz
 Summary  : the open-source application container engine
 Group    : Development/Tools
 License  : Apache-2.0
@@ -33,7 +32,7 @@ Patch1    : 0001-add-suffix-to-socket-and-service-files.patch
 Docker is an open source project to pack, ship and run any application as a lightweight container.
 
 %prep
-%setup -q -n docker-1.12.0-rc4
+%setup -q -n docker-1.12.0
 %patch1 -p1
 
 %build
@@ -46,8 +45,8 @@ export DOCKER_GITCOMMIT=%commit_id AUTO_GOPATH=1 GOROOT=/usr/lib/golang
 rm -rf %{buildroot}
 # install binary
 install -d %{buildroot}/%{_bindir}
-install -p -m 755 bundles/latest/dynbinary-client/docker-%{version}-rc4 %{buildroot}%{_bindir}/docker-upstream
-install -p -m 755 bundles/latest/dynbinary-daemon/dockerd-%{version}-rc4 %{buildroot}%{_bindir}/dockerd-upstream
+install -p -m 755 bundles/latest/dynbinary-client/docker-%{version} %{buildroot}%{_bindir}/docker-upstream
+install -p -m 755 bundles/latest/dynbinary-daemon/dockerd-%{version} %{buildroot}%{_bindir}/dockerd-upstream
 # install containerd
 ln -s /usr/bin/containerd %{buildroot}/%{_bindir}/docker-containerd
 ln -s /usr/bin/containerd-shim %{buildroot}/%{_bindir}/docker-containerd-shim
@@ -57,7 +56,7 @@ ln -s /usr/bin/containerd-ctr %{buildroot}/%{_bindir}/docker-containerd-ctr
 ln -s /usr/bin/runc %{buildroot}/%{_bindir}/docker-runc
 
 # install systemd unit files
-install -m 0644 -D %{SOURCE1} %{buildroot}%{_prefix}/lib/systemd/system/docker-upstream.service
+install -m 0644 -D ./contrib/init/systemd/docker-upstream.service %{buildroot}%{_prefix}/lib/systemd/system/docker-upstream.service
 install -m 0644 -D ./contrib/init/systemd/docker-upstream.socket %{buildroot}%{_prefix}/lib/systemd/system/docker-upstream.socket
 mkdir -p %{buildroot}/usr/lib/systemd/system/sockets.target.wants
 ln -s ../docker-upstream.socket %{buildroot}/usr/lib/systemd/system/sockets.target.wants/docker-upstream.socket

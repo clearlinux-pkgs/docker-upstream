@@ -1,7 +1,9 @@
-From 3d2d853b6ab9ad225bcaf46c83094022aa5e0993 Mon Sep 17 00:00:00 2001
+From a5d442df359b19f42f97719ee6478bff9ac15e61 Mon Sep 17 00:00:00 2001
 From: Julio Montes <julio.montes@intel.com>
 Date: Wed, 13 Jul 2016 13:55:03 -0500
 Subject: [PATCH] add suffix to socket and service files
+
+switch to overlayfs as backend
 
 Signed-off-by: Julio Montes <julio.montes@intel.com>
 ---
@@ -17,7 +19,7 @@ Signed-off-by: Julio Montes <julio.montes@intel.com>
 
 diff --git a/contrib/init/systemd/docker-upstream.service b/contrib/init/systemd/docker-upstream.service
 new file mode 100644
-index 0000000..2ad1b25
+index 0000000..c7b6d2a
 --- /dev/null
 +++ b/contrib/init/systemd/docker-upstream.service
 @@ -0,0 +1,29 @@
@@ -32,7 +34,7 @@ index 0000000..2ad1b25
 +# the default is not to use systemd for cgroups because the delegate issues still
 +# exists and systemd currently does not support the cgroup feature set required
 +# for containers run by docker
-+ExecStart=/usr/bin/dockerd-upstream -H fd://
++ExecStart=/usr/bin/dockerd-upstream -H fd:// --storage-driver=overlay
 +ExecReload=/bin/kill -s HUP $MAINPID
 +# Having non-zero Limit*s causes performance problems due to accounting overhead
 +# in the kernel. We recommend using cgroups to do container-local accounting.
